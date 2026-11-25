@@ -68,7 +68,7 @@ def atr(df: pd.DataFrame, period: int = ATR_PERIOD) -> float:
 
 
 def evaluate():
-        h1 = get_data("1h", "60d", 60)
+    h1 = get_data("1h", "60d", 60)
     m15 = h1
     m5 = get_data("30m", "10d", 30)
     h4 = h1.resample("4h").agg({"Open": "first", "High": "max", "Low": "min", "Close": "last"}).dropna()
