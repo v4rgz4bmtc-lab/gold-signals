@@ -20,7 +20,11 @@ MIN_MINUTES_BETWEEN = 60
 START_HOUR_UTC, END_HOUR_UTC = 0, 24
 PIP = 0.1
 
-TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
+import re as _re
+_m = _re.search(r"\d{6,}:[A-Za-z0-9_-]{30,}", os.environ.get("TELEGRAM_TOKEN", ""))
+TOKEN = _m.group(0) if _m else os.environ.get("TELEGRAM_TOKEN", "").strip()
+print("Token:", "format OK, longueur", len(TOKEN)) if _m else print("Token: format INVALIDE")
+("TELEGRAM_TOKEN", "")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
 
