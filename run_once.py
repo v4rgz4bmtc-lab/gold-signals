@@ -47,7 +47,7 @@ def main() -> None:
         if signal is None:
             return
         now = datetime.now(timezone.utc)
-        if now - candle_time > timedelta(minutes=12):
+        if now - candle_time > timedelta(minutes=45):
             return
         if not (b.START_HOUR_UTC <= now.hour < b.END_HOUR_UTC):
             return
