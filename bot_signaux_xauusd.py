@@ -68,9 +68,12 @@ def atr(df: pd.DataFrame, period: int = ATR_PERIOD) -> float:
 
 
 def evaluate():
-    h1 = get_data("1h", "60d", 60)
-    m15 = get_data("15m", "5d", 15)
-    m5 = get_data("5m", "5d", 5)
+        h1 = get_data("1h", "60d", 60)
+    m15 = h1
+    m5 = get_data("30m", "10d", 30)
+    h4 = h1.resample("4h").agg({"Open": "first", "High": "max", "Low": "min", "Close": "last"}).dropna()
+    h1 = h4
+
     if len(h1) < EMA_SLOW + 2 or len(m15) < ZONE_LOOKBACK + ATR_PERIOD or len(m5) < ATR_PERIOD + 3:
         return None
 
@@ -128,7 +131,7 @@ def format_message(side, entry, sl, tp) -> str:
     sl_sign = "+" if side == "SELL" else "-"
     tp_sign = "-" if side == "SELL" else "+"
     return (
-        "MALIK-SIGNAL-BOT - M5\n"
+        "DMKJ_TRADING_AI_M30\n"
         "Status: SIGNAL ONLY - execute manually\n"
         f"Symbol: {SYMBOL_LABEL}\n"
         f"Side: {side}\n"
