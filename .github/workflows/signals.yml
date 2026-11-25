@@ -22,7 +22,7 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install yfinance pandas requests
-      - run: python run_once.py
+      - run: python run_once.py test
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
