@@ -230,6 +230,7 @@ def evaluate():
     m15 = get_data("15m", "20d", 15)
     m5 = get_data("5m", "5d", 5)
     if len(d1) < 20 or len(h1) < 60 or len(m15) < 80 or len(m5) < 40:
+        print(f"DIAG: donnees insuffisantes d1={len(d1)} h1={len(h1)} m15={len(m15)} m5={len(m5)}")
         return None
 
     last_time = m5.index[-1]
@@ -240,7 +241,10 @@ def evaluate():
     if len(h4) and h4.index[-1] + timedelta(hours=4) > datetime.now(timezone.utc):
         h4 = h4.iloc[:-1]
     t_4 = trend(h4)
+    print(f"DIAG: derniere bougie M5 = {last_time:%Y-%m-%d %H:%M} UTC | prix = {m5['Close'].iloc[-1]:.2f}")
+    print(f"DIAG: tendance H4 = {t_4} (1 haussier, -1 baissier, 0 pas claire)")
     if t_4 == 0:
+        print("DIAG: BLOQUE a l'etape A : tendance H4 pas claire")
         return last_time, None
     direction = t_4
 
@@ -248,20 +252,26 @@ def evaluate():
     m15w = m15.iloc[-M15_BARS:].reset_index(drop=True)
     poi = find_poi(m15w, direction, atr(m15))
     if poi is None:
+        print("DIAG: BLOQUE a l'etape P : aucun Order Block valide (sweep + BOS)")
         return last_time, None
+    print(f"DIAG: POI trouve entre {poi['low']:.2f} et {poi['high']:.2f}")
 
     # --- A : Action (CHoCH + retest + rejet sur M5)
     m5w = m5.iloc[-M5_BARS:]
     res = find_action(m5w.reset_index(drop=True), direction, poi, atr(m5))
     if res is None:
+        print("DIAG: BLOQUE a l'etape A (action) : pas de CHoCH + retest + rejet sur M5")
         return last_time, None
     r, entry, sl = res
     if r < len(m5w) - SIGNAL_WINDOW:        # signal trop ancien
+        print("DIAG: setup trouve mais trop ancien")
         return last_time, None
 
     risk = abs(entry - sl)
     if risk <= 0 or risk > MAX_RISK_PRICE:
+        print(f"DIAG: setup trouve mais SL trop large ({risk:.2f} $)")
         return last_time, None
+    print("DIAG: SIGNAL TROUVE")
     if direction == 1:
         side, tp = "BUY", entry + RR * risk
     else:
