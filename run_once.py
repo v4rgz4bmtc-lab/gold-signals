@@ -30,7 +30,7 @@ MAX_RISK_ATR = 2.5          # SL maximum (x ATR M15), sinon pas de signal
 MAX_SIGNALS_PER_DAY = 10
 MIN_MINUTES_BETWEEN = 30
 STALE_MINUTES = 60          # prix trop anciens -> pas de signal
-START_HOUR_UTC, END_HOUR_UTC = 6, 21     # plage active (UTC). Cameroun = UTC+1
+START_HOUR_UTC, END_HOUR_UTC = 0, 24     # plage active (UTC). Cameroun = UTC+1
 ANALYSIS_EVERY_MIN = 30
 PIP = 0.1
 STATE_FILE = "state.json"
