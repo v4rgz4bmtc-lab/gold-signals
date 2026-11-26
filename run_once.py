@@ -30,7 +30,7 @@ MAX_RISK_ATR = 2.5          # SL maximum (x ATR M15), sinon pas de signal
 MAX_SIGNALS_PER_DAY = 10
 MIN_MINUTES_BETWEEN = 30
 STALE_MINUTES = 60          # prix trop anciens -> pas de signal
-START_HOUR_UTC, END_HOUR_UTC = 0, 24     # plage active (UTC). Cameroun = UTC+1
+START_HOUR_UTC, END_HOUR_UTC = 6, 21     # plage active (UTC). Cameroun = UTC+1
 ANALYSIS_EVERY_MIN = 30
 PIP = 0.1
 STATE_FILE = "state.json"
@@ -153,17 +153,21 @@ def compute_signal(m15: pd.DataFrame, h1: pd.DataFrame):
 
 
 def format_signal(side, entry, sl, tp) -> str:
-    sl_pips, tp_pips = abs(sl - entry) / PIP, abs(tp - entry) / PIP
-    sl_sign, tp_sign = ("+", "-") if side == "SELL" else ("-", "+")
+    sl_d, tp_d = abs(sl - entry), abs(tp - entry)
+    sl_pips, tp_pips = sl_d / PIP, tp_d / PIP
+    tol_pips = max(10, round(0.2 * sl_pips))
+    sl_txt = "sous" if side == "BUY" else "au-dessus de"
+    tp_txt = "au-dessus de" if side == "BUY" else "sous"
     return (
         "MALIK-SIGNAL-BOT - M15\n"
-        "Status: SIGNAL ONLY - execute manually\n"
+        "SIGNAL ONLY - execute manually\n"
         f"Symbol: {SYMBOL}\n"
-        f"Side: {side}\n"
-        f"Entry: {entry:.2f}\n"
-        f"SL: {sl:.2f} ({sl_sign}{sl_pips:.0f} pips)\n"
-        f"TP: {tp:.2f} ({tp_sign}{tp_pips:.0f} pips)\n"
-        "Rappel: 1% de risque max. Verifie le prix sur Deriv avant d'entrer."
+        f"Action: {side} au marche\n"
+        f"SL: {sl_pips:.0f} pips {sl_txt} ton entree ({sl_d:.2f} $)\n"
+        f"TP: {tp_pips:.0f} pips {tp_txt} ton entree ({tp_d:.2f} $)\n"
+        f"Prix repere: {entry:.2f} (Yahoo). Entre seulement si ton prix Deriv est a "
+        f"moins de {tol_pips} pips ({tol_pips * PIP:.1f} $) de ce repere, sinon passe.\n"
+        "Rappel: 1% de risque max."
     )
 
 
