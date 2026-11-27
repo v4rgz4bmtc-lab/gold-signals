@@ -19,7 +19,6 @@ import requests
 import yfinance as yf
 
 # ------------------------- PARAMETRES -------------------------
-TICKER = "GC=F"
 SYMBOL = "XAUUSD"
 RR = 1.5                    # ratio TP / SL
 ATR_PERIOD = 14
@@ -56,9 +55,9 @@ def send_telegram(text: str) -> None:
         print("Erreur reseau Telegram:", e)
 
 
-def _yahoo(interval: str, period: str, minutes: int) -> pd.DataFrame:
-    """Secours : Yahoo (or en futures). Bougies cloturees uniquement."""
-    df = yf.download(TICKER, interval=interval, period=period,
+def _yahoo(ticker: str, interval: str, period: str, minutes: int) -> pd.DataFrame:
+    """Yahoo Finance. Bougies cloturees uniquement."""
+    df = yf.download(ticker, interval=interval, period=period,
                      progress=False, auto_adjust=False)
     if df is None or df.empty:
         return pd.DataFrame()
@@ -72,53 +71,92 @@ def _yahoo(interval: str, period: str, minutes: int) -> pd.DataFrame:
     return df
 
 
-DERIV_URL = "wss://ws.derivws.com/websockets/v3?app_id=1089"
+DERIV_URLS = ["wss://ws.derivws.com/websockets/v3?app_id=1089",
+              "wss://ws.binaryws.com/websockets/v3?app_id=1089"]
 DERIV_SYMBOL = "frxXAUUSD"
 GRANULARITY = {"15m": 900, "1h": 3600}
-SOURCE = "Deriv"
+PERIOD = {"15m": "10d", "1h": "30d"}
+SOURCE = "?"
+FRESH_OK_MINUTES = 30      # source consideree a jour si sa derniere bougie a moins de 30 min
+_PREFERRED = None
 
 
 def _deriv(granularity: int, count: int) -> pd.DataFrame:
-    """Bougies de l'or directement depuis Deriv (memes prix que ton courtier)."""
+    """Bougies de l'or depuis Deriv (memes prix que ton courtier)."""
     try:
         import websocket
     except ImportError:
         import subprocess
         subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "websocket-client"])
         import websocket
-    ws = websocket.create_connection(DERIV_URL, timeout=15)
-    try:
-        ws.send(json.dumps({"ticks_history": DERIV_SYMBOL, "adjust_start_time": 1, "count": count,
-                            "end": "latest", "granularity": granularity, "style": "candles"}))
-        data = json.loads(ws.recv())
-    finally:
-        ws.close()
-    if "error" in data:
-        raise RuntimeError(data["error"].get("message", "erreur Deriv"))
-    df = pd.DataFrame(data.get("candles", []))
-    if df.empty:
+    last_err = None
+    for url in DERIV_URLS:
+        try:
+            ws = websocket.create_connection(url, timeout=15, origin="https://deriv.com")
+        except Exception as e:
+            last_err = e
+            continue
+        try:
+            ws.send(json.dumps({"ticks_history": DERIV_SYMBOL, "adjust_start_time": 1, "count": count,
+                                "end": "latest", "granularity": granularity, "style": "candles"}))
+            data = json.loads(ws.recv())
+        finally:
+            ws.close()
+        if "error" in data:
+            last_err = RuntimeError(data["error"].get("message", "erreur Deriv"))
+            continue
+        df = pd.DataFrame(data.get("candles", []))
+        if df.empty:
+            continue
+        df.index = pd.to_datetime(df["epoch"], unit="s", utc=True)
+        df = df.rename(columns={"open": "Open", "high": "High", "low": "Low", "close": "Close"})
+        df = df[["Open", "High", "Low", "Close"]].astype(float)
+        if df.index[-1] + timedelta(seconds=granularity) > datetime.now(timezone.utc):
+            df = df.iloc[:-1]
         return df
-    df.index = pd.to_datetime(df["epoch"], unit="s", utc=True)
-    df = df.rename(columns={"open": "Open", "high": "High", "low": "Low", "close": "Close"})
-    df = df[["Open", "High", "Low", "Close"]].astype(float)
-    if df.index[-1] + timedelta(seconds=granularity) > datetime.now(timezone.utc):
-        df = df.iloc[:-1]
-    return df
+    raise RuntimeError(str(last_err)[:90] if last_err else "aucune reponse")
+
+
+SOURCES = {
+    "Deriv": lambda i: _deriv(GRANULARITY[i], 500 if i == "15m" else 300),
+    "Yahoo spot": lambda i: _yahoo("XAUUSD=X", i, PERIOD[i], GRANULARITY[i] // 60),
+    "Yahoo futures": lambda i: _yahoo("GC=F", i, PERIOD[i], GRANULARITY[i] // 60),
+}
 
 
 def get_data(interval: str, period: str, minutes: int) -> pd.DataFrame:
-    """Deriv d'abord ; Yahoo en secours si Deriv ne repond pas."""
-    global SOURCE
-    try:
-        df = _deriv(GRANULARITY[interval], 500 if interval == "15m" else 300)
-        if len(df) >= 60:
-            SOURCE = "Deriv"
-            return df
-        print(f"DIAG: Deriv a renvoye trop peu de bougies ({len(df)})")
-    except Exception as e:
-        print("DIAG: Deriv indisponible :", e)
-    SOURCE = "Yahoo"
-    return _yahoo(interval, period, minutes)
+    """Essaie plusieurs sources de prix. Pour M15, garde la plus fraiche ;
+    pour H1, reprend la meme source si possible."""
+    global SOURCE, _PREFERRED
+    now = datetime.now(timezone.utc)
+    gran = GRANULARITY[interval]
+    results = []
+    names = list(SOURCES)
+    if interval != "15m" and _PREFERRED in names:
+        names.remove(_PREFERRED)
+        names.insert(0, _PREFERRED)
+    for name in names:
+        try:
+            df = SOURCES[name](interval)
+        except Exception as e:
+            print(f"DIAG: {name} indisponible ({interval}) : {str(e)[:90]}")
+            continue
+        if len(df) < 60:
+            print(f"DIAG: {name} : trop peu de bougies ({len(df)}) en {interval}")
+            continue
+        age = (now - (df.index[-1].to_pydatetime() + timedelta(seconds=gran))).total_seconds() / 60
+        print(f"DIAG: {name} ({interval}) : derniere bougie il y a {age:.0f} min")
+        results.append((age, name, df))
+        if interval != "15m":
+            break                      # H1 : on prend la premiere source qui repond
+    if not results:
+        SOURCE = "aucune"
+        return pd.DataFrame()
+    good = [x for x in results if x[0] <= FRESH_OK_MINUTES]   # priorite : Deriv, puis Yahoo
+    age, name, df = good[0] if good else min(results, key=lambda x: x[0])
+    if interval == "15m":
+        SOURCE, _PREFERRED = name, name
+    return df
 
 
 # ----------------------------- INDICATEURS -----------------------------
