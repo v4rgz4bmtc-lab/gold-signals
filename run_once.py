@@ -56,8 +56,8 @@ def send_telegram(text: str) -> None:
         print("Erreur reseau Telegram:", e)
 
 
-def get_data(interval: str, period: str, minutes: int) -> pd.DataFrame:
-    """Bougies cloturees uniquement (la bougie en cours est retiree)."""
+def _yahoo(interval: str, period: str, minutes: int) -> pd.DataFrame:
+    """Secours : Yahoo (or en futures). Bougies cloturees uniquement."""
     df = yf.download(TICKER, interval=interval, period=period,
                      progress=False, auto_adjust=False)
     if df is None or df.empty:
@@ -70,6 +70,55 @@ def get_data(interval: str, period: str, minutes: int) -> pd.DataFrame:
     if len(df) and df.index[-1] + timedelta(minutes=minutes) > datetime.now(timezone.utc):
         df = df.iloc[:-1]
     return df
+
+
+DERIV_URL = "wss://ws.derivws.com/websockets/v3?app_id=1089"
+DERIV_SYMBOL = "frxXAUUSD"
+GRANULARITY = {"15m": 900, "1h": 3600}
+SOURCE = "Deriv"
+
+
+def _deriv(granularity: int, count: int) -> pd.DataFrame:
+    """Bougies de l'or directement depuis Deriv (memes prix que ton courtier)."""
+    try:
+        import websocket
+    except ImportError:
+        import subprocess
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "websocket-client"])
+        import websocket
+    ws = websocket.create_connection(DERIV_URL, timeout=15)
+    try:
+        ws.send(json.dumps({"ticks_history": DERIV_SYMBOL, "adjust_start_time": 1, "count": count,
+                            "end": "latest", "granularity": granularity, "style": "candles"}))
+        data = json.loads(ws.recv())
+    finally:
+        ws.close()
+    if "error" in data:
+        raise RuntimeError(data["error"].get("message", "erreur Deriv"))
+    df = pd.DataFrame(data.get("candles", []))
+    if df.empty:
+        return df
+    df.index = pd.to_datetime(df["epoch"], unit="s", utc=True)
+    df = df.rename(columns={"open": "Open", "high": "High", "low": "Low", "close": "Close"})
+    df = df[["Open", "High", "Low", "Close"]].astype(float)
+    if df.index[-1] + timedelta(seconds=granularity) > datetime.now(timezone.utc):
+        df = df.iloc[:-1]
+    return df
+
+
+def get_data(interval: str, period: str, minutes: int) -> pd.DataFrame:
+    """Deriv d'abord ; Yahoo en secours si Deriv ne repond pas."""
+    global SOURCE
+    try:
+        df = _deriv(GRANULARITY[interval], 500 if interval == "15m" else 300)
+        if len(df) >= 60:
+            SOURCE = "Deriv"
+            return df
+        print(f"DIAG: Deriv a renvoye trop peu de bougies ({len(df)})")
+    except Exception as e:
+        print("DIAG: Deriv indisponible :", e)
+    SOURCE = "Yahoo"
+    return _yahoo(interval, period, minutes)
 
 
 # ----------------------------- INDICATEURS -----------------------------
@@ -170,7 +219,7 @@ def format_signal(side, entry, sl, tp) -> str:
         f"Action: {side} au marche\n"
         f"SL: {sl_pips:.0f} pips {sl_txt} ton entree ({sl_d:.2f} $)\n"
         f"TP: {tp_pips:.0f} pips {tp_txt} ton entree ({tp_d:.2f} $)\n"
-        f"Prix repere: {entry:.2f} (Yahoo). Entre seulement si ton prix Deriv est a "
+        f"Prix repere: {entry:.2f} ({SOURCE}). Entre seulement si ton prix Deriv est a "
         f"moins de {tol_pips} pips ({tol_pips * PIP:.1f} $) de ce repere, sinon passe.\n"
         "Rappel: 1% de risque max."
     )
@@ -236,13 +285,13 @@ def main(now: datetime = None) -> None:
 
     candle_time = m15.index[-1].to_pydatetime()
     age = (now - (candle_time + timedelta(minutes=15))).total_seconds() / 60
-    print(f"DIAG: derniere bougie M15 = {candle_time:%Y-%m-%d %H:%M} UTC | age = {age:.0f} min | prix = {m15['Close'].iloc[-1]:.2f}")
+    print(f"DIAG: derniere bougie M15 = {candle_time:%Y-%m-%d %H:%M} UTC | age = {age:.0f} min | prix = {m15['Close'].iloc[-1]:.2f} | source = {SOURCE}")
 
     # Prix trop anciens : on previent et on ne trade pas
     if age > STALE_MINUTES:
         print("DIAG: prix trop anciens, aucun signal")
         if in_hours and st.get("stale_day") != today:
-            send_telegram(f"ATTENTION : les prix sont en retard de {age/60:.1f} h (source Yahoo). "
+            send_telegram(f"ATTENTION : les prix sont en retard de {age/60:.1f} h (source {SOURCE}). "
                           "Aucun signal tant que ce n'est pas revenu a la normale.")
             st["stale_day"] = today
             save_state(st)
