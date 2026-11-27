@@ -33,6 +33,11 @@ STALE_MINUTES = 60          # prix trop anciens -> pas de signal
 START_HOUR_UTC, END_HOUR_UTC = 6, 21     # plage active (UTC). Cameroun = UTC+1
 ANALYSIS_EVERY_MIN = 30
 PIP = 0.1
+# Position du jour (heure fixe, sans attendre de confirmation)
+DAILY_HOURS_UTC = [7, 12]   # 7h et 12h UTC = 8h et 13h au Cameroun
+DAILY_SL_ATR = 1.5          # SL = 1,5 x ATR M15
+DAILY_RR = 2.0              # TP = 2 x SL
+DAILY_WINDOW_H = 3          # envoyee si le bot passe dans les 3h suivant l'heure
 STATE_FILE = "state.json"
 # --------------------------------------------------------------
 
@@ -261,6 +266,23 @@ def main(now: datetime = None) -> None:
                 st["last_signal_time"] = now.isoformat()
                 print("DIAG: signal envoye")
         save_state(st)
+
+    # --- Position du jour (heure fixe, sans confirmation)
+    for h in DAILY_HOURS_UTC:
+        key = f"{today}-{h}"
+        start = now.replace(hour=h, minute=0, second=0, microsecond=0)
+        if start <= now < start + timedelta(hours=DAILY_WINDOW_H) and key not in st.get("daily_sent", []):
+            c = context(m15, h1)
+            side = "BUY" if c["h1_up"] else "SELL"
+            risk = DAILY_SL_ATR * c["atr"]
+            entry = c["price"]
+            sl = entry - risk if side == "BUY" else entry + risk
+            tp = entry + DAILY_RR * risk if side == "BUY" else entry - DAILY_RR * risk
+            send_telegram(format_signal(side, entry, sl, tp).replace(
+                "MALIK-SIGNAL-BOT - M15", "POSITION DU JOUR - M15 (heure fixe)"))
+            st["daily_sent"] = [k for k in st.get("daily_sent", []) if k.startswith(today)] + [key]
+            save_state(st)
+            print("DIAG: position du jour envoyee")
 
     # --- Analyse toutes les 30 minutes
     slot = now.replace(minute=(now.minute // ANALYSIS_EVERY_MIN) * ANALYSIS_EVERY_MIN, second=0, microsecond=0).isoformat()
